@@ -58,6 +58,83 @@ const ProjectMembership = mongoose.model(
   projectMembershipSchema
 )
 
+const storySchema = new mongoose.Schema({
+  project_id: { type: mongoose.Schema.Types.ObjectId, ref: 'Project', required: true, immutable: true },
+  title: { type: String, required: true, trim: true },
+  description: { type: String, required: true, trim: true },
+  priority: { type: String, enum: ['High', 'Medium', 'Low'], required: true },
+  status: { type: String, enum: ['To Do', 'In Progress', 'Done'], default: 'To Do', required: true },
+  assigned_user_id: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+}, { collection: 'UserStories' })
+const UserStory = mongoose.model('UserStory', storySchema)
+const validId = (id) => typeof id === 'string' && /^[0-9a-fA-F]{24}$/.test(id)
+const priorities = ['High', 'Medium', 'Low']
+const statuses = ['To Do', 'In Progress', 'Done']
+
+async function validateStory(body, projectId, editing = false) {
+  if (!body || typeof body.title !== 'string' || !body.title.trim() ||
+      typeof body.description !== 'string' || !body.description.trim()) return 'Title and description are required.'
+  if (!priorities.includes(body.priority)) return 'Invalid priority.'
+  if (editing && !statuses.includes(body.status)) return 'Invalid story status.'
+  if (body.assigned_user_id !== null && body.assigned_user_id !== undefined && body.assigned_user_id !== '') {
+    if (!validId(body.assigned_user_id)) return 'Invalid assigned user ID.'
+    if (!await User.exists({ _id: body.assigned_user_id })) return 'Assigned user does not exist.'
+    if (!await ProjectMembership.exists({ project_id: projectId, user_id: body.assigned_user_id })) return 'Assigned user must belong to this project.'
+  }
+  return null
+}
+
+app.get('/projects/:projectId/stories', async (req, res) => {
+  try {
+    const { projectId } = req.params
+    if (!validId(projectId)) return res.status(400).json({ message: 'Invalid project ID.' })
+    if (!await Project.exists({ _id: projectId })) return res.status(404).json({ message: 'Project does not exist.' })
+    const stories = await UserStory.find({ project_id: projectId }).populate('assigned_user_id', 'f_name l_name username').sort({ _id: -1 })
+    res.json(stories)
+  } catch (err) { console.error(err); res.status(500).json({ message: 'Server error.' }) }
+})
+
+app.post('/projects/:projectId/stories', async (req, res) => {
+  try {
+    const { projectId } = req.params
+    if (!validId(projectId)) return res.status(400).json({ message: 'Invalid project ID.' })
+    if (!await Project.exists({ _id: projectId })) return res.status(404).json({ message: 'Project does not exist.' })
+    const issue = await validateStory(req.body, projectId)
+    if (issue) return res.status(400).json({ message: issue })
+    const { title, description, priority, assigned_user_id } = req.body
+    const story = await UserStory.create({ project_id: projectId, title: title.trim(), description: description.trim(), priority, status: 'To Do', assigned_user_id: assigned_user_id || null })
+    res.status(201).json({ message: 'Story created successfully.', story })
+  } catch (err) { console.error(err); res.status(500).json({ message: 'Server error.' }) }
+})
+
+app.put('/projects/:projectId/stories/:storyId', async (req, res) => {
+  try {
+    const { projectId, storyId } = req.params
+    if (!validId(projectId) || !validId(storyId)) return res.status(400).json({ message: 'Invalid project or story ID.' })
+    if (!await Project.exists({ _id: projectId })) return res.status(404).json({ message: 'Project does not exist.' })
+    const story = await UserStory.findOne({ _id: storyId, project_id: projectId })
+    if (!story) return res.status(404).json({ message: 'Story not found in this project.' })
+    if (req.body.project_id !== undefined && String(req.body.project_id) !== projectId) return res.status(400).json({ message: 'Cannot move story to another project.' })
+    const issue = await validateStory(req.body, projectId, true)
+    if (issue) return res.status(400).json({ message: issue })
+    const { title, description, priority, status, assigned_user_id } = req.body
+    Object.assign(story, { title: title.trim(), description: description.trim(), priority, status, assigned_user_id: assigned_user_id || null })
+    await story.save()
+    res.json({ message: 'Story updated successfully.', story })
+  } catch (err) { console.error(err); res.status(500).json({ message: 'Server error.' }) }
+})
+
+app.delete('/projects/:projectId/stories/:storyId', async (req, res) => {
+  try {
+    const { projectId, storyId } = req.params
+    if (!validId(projectId) || !validId(storyId)) return res.status(400).json({ message: 'Invalid project or story ID.' })
+    if (!await Project.exists({ _id: projectId })) return res.status(404).json({ message: 'Project does not exist.' })
+    const story = await UserStory.findOneAndDelete({ _id: storyId, project_id: projectId })
+    if (!story) return res.status(404).json({ message: 'Story not found in this project.' })
+    res.json({ message: 'Story deleted successfully.' })
+  } catch (err) { console.error(err); res.status(500).json({ message: 'Server error.' }) }
+})
+
 app.post('/signup', async (req, res) => {
   try {
     const { f_name, l_name, username, password } = req.body
@@ -338,6 +415,11 @@ app.delete('/projects/:projectId/members/:userId', async (req, res) => {
       return res.status(400).json({
         message: 'The project lead cannot be removed.',
       })
+    }
+
+    const assignedStory = await UserStory.exists({ project_id: projectId, assigned_user_id: userId })
+    if (assignedStory) {
+      return res.status(400).json({ message: 'Member has assigned stories. Reassign, unassign, or delete those stories first.' })
     }
 
     const membership = await ProjectMembership.findOneAndDelete({

@@ -314,3 +314,7 @@ label {
     flex-wrap: wrap;
   }
 }
+
+.story-item { padding: 16px; margin: 12px 0; border: 1px solid #bbb5; border-radius: 8px; }
+.story-item h3 { margin: 0 0 8px; }
+.story-item p { overflow-wrap: anywhere; }

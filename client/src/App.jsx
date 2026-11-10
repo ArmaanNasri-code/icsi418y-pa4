@@ -27,6 +27,10 @@ function App() {
   const [members, setMembers] = useState([])
   const [selectedProject, setSelectedProject] = useState('')
   const [selectedUser, setSelectedUser] = useState('')
+  const [stories, setStories] = useState([])
+  const [editingStory, setEditingStory] = useState(null)
+  const emptyStory = () => ({ title: '', description: '', priority: 'Medium', status: 'To Do', assigned_user_id: '' })
+  const [storyData, setStoryData] = useState(emptyStory())
 
   const [projectData, setProjectData] = useState({
     name: '',
@@ -96,6 +100,43 @@ function App() {
       loadProjects()
     }
   }, [page])
+
+  useEffect(() => {
+    if (page === 'backlog' && selectedProject) {
+      let active = true
+      Promise.all([request(`/projects/${selectedProject}/stories`), request(`/projects/${selectedProject}/members`)]).then(([items, people]) => {
+        if (active) { setStories(items); setMembers(people) }
+      }).catch(err => { if (active) notify(err.message, true) })
+      return () => { active = false }
+    }
+  }, [selectedProject, page])
+
+  const refreshStories = async () => {
+    if (selectedProject) setStories(await request(`/projects/${selectedProject}/stories`))
+  }
+
+  const saveStory = async (e) => {
+    e.preventDefault()
+    try {
+      const path = `/projects/${selectedProject}/stories${editingStory ? `/${editingStory}` : ''}`
+      const result = await request(path, { method: editingStory ? 'PUT' : 'POST', body: JSON.stringify(storyData) })
+      notify(result.message)
+      setEditingStory(null)
+      setStoryData(emptyStory())
+      await refreshStories()
+    } catch (err) { notify(err.message, true) }
+  }
+
+  const deleteStory = async (story) => {
+    if (!window.confirm(`Delete story "${story.title}"?`)) return
+    try {
+      const result = await request(`/projects/${selectedProject}/stories/${story._id}`, { method: 'DELETE' })
+      notify(result.message)
+      setEditingStory(null)
+      setStoryData(emptyStory())
+      await refreshStories()
+    } catch (err) { notify(err.message, true) }
+  }
 
   useEffect(() => {
     if (page === 'members') {
@@ -322,7 +363,7 @@ function App() {
       <header className="dashboard-header">
         <div>
           <h1>Project Management</h1>
-          <p>ICSI 418Y - Programming Assignment 3</p>
+          <p>ICSI 418Y - Programming Assignment 4</p>
         </div>
 
         <button
@@ -355,6 +396,7 @@ function App() {
         >
           Manage Members
         </button>
+        <button className={page === 'backlog' ? 'active' : ''} onClick={() => changePage('backlog')}>Project Backlog</button>
       </nav>
 
       <main className="dashboard-content">
@@ -364,6 +406,56 @@ function App() {
           </p>
         )}
 
+        {page === 'backlog' && (
+          <section className="panel">
+            <h2>Project Backlog</h2>
+            <label>Select Project</label>
+            <select value={selectedProject} onChange={e => {
+              setSelectedProject(e.target.value)
+              setStories([]); setMembers([]); setEditingStory(null); setStoryData(emptyStory()); setMessage('')
+            }}>
+              <option value="">Choose a project</option>
+              {projects.map(p => <option key={p._id} value={p._id}>{p.name}</option>)}
+            </select>
+            {selectedProject && <>
+              <h3>{editingStory ? 'Edit User Story' : 'Create User Story'}</h3>
+              <form onSubmit={saveStory}>
+                <label>Title</label>
+                <input required value={storyData.title} onChange={e => setStoryData({...storyData, title:e.target.value})} />
+                <label>Description (As a ..., I want ..., so that ...)</label>
+                <textarea required value={storyData.description} onChange={e => setStoryData({...storyData, description:e.target.value})} />
+                <label>Priority</label>
+                <select value={storyData.priority} onChange={e => setStoryData({...storyData, priority:e.target.value})}>
+                  {['High','Medium','Low'].map(v => <option key={v}>{v}</option>)}
+                </select>
+                {editingStory && <><label>Status</label><select value={storyData.status} onChange={e => setStoryData({...storyData, status:e.target.value})}>
+                  {['To Do','In Progress','Done'].map(v => <option key={v}>{v}</option>)}
+                </select></>}
+                <label>Assigned Member</label>
+                <select value={storyData.assigned_user_id} onChange={e => setStoryData({...storyData, assigned_user_id:e.target.value})}>
+                  <option value="">Unassigned</option>
+                  {members.filter(m => m.user_id).map(m => <option key={m.user_id._id} value={m.user_id._id}>{userName(m.user_id)}</option>)}
+                </select>
+                <button className="submit-button" type="submit">{editingStory ? 'Save Changes' : 'Create Story'}</button>
+                {editingStory && <button type="button" className="secondary-button" onClick={() => { setEditingStory(null); setStoryData(emptyStory()) }}>Cancel</button>}
+              </form>
+              <h3>Stories ({stories.length})</h3>
+              {stories.length === 0 ? <p>No user stories for this project yet.</p> : <div className="member-list">
+                {stories.map(story => <div key={story._id} className="story-item">
+                  <h3>{story.title}</h3>
+                  <p>{story.description}</p>
+                  <p><strong>Priority:</strong> {story.priority} | <strong>Status:</strong> {story.status}</p>
+                  <p><strong>Assigned:</strong> {story.assigned_user_id ? userName(story.assigned_user_id) : 'Unassigned'}</p>
+                  <button type="button" className="secondary-button" onClick={() => {
+                    setEditingStory(story._id)
+                    setStoryData({ title:story.title, description:story.description, priority:story.priority, status:story.status, assigned_user_id:story.assigned_user_id?._id || '' })
+                  }}>Edit</button>{' '}
+                  <button type="button" className="remove-button" onClick={() => deleteStory(story)}>Delete</button>
+                </div>)}
+              </div>}
+            </>}
+          </section>
+        )}
         {page === 'create' && (
           <section className="panel">
             <h2>Create Project</h2>
